@@ -1,7 +1,7 @@
 import sys, pathlib
 root = pathlib.Path(__file__).parent
 data = pathlib.Path(sys.argv[1] if len(sys.argv) > 1 else root / 'data/data.js').read_text()
-app = (root / 'src/app.js').read_text()
+app = (root / 'src/lore.js').read_text() + '\n' + (root / 'src/app.js').read_text()
 html = (root / 'src/app.html').read_text()
 assert '</script' not in data.lower() and '</script' not in app.lower()
 out = html.replace('/*__DATA__*/', data).replace('/*__APP__*/', app)

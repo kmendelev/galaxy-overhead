@@ -99,11 +99,12 @@ const CONS = DATA.cons.map(([n, ra, dec, rank]) => ({ n, v: vRD(ra, dec), rank }
 const GEQ = []; for (let l = 0; l < 360; l += 1) GEQ.push(galVec(l, 0));
 const GLAT = [10, -10].map(b => { const a = []; for (let l = 0; l < 360; l += 2) a.push(galVec(l, b)); return a; });
 const GMER = []; for (let l = 0; l < 360; l += 30) { const a = []; for (let b = -84; b <= 84; b += 3) a.push(galVec(l, b)); GMER.push({ l, pts: a }); }
-const OBJS = DATA.objs.map(o => ({ ...o, v: vRD(o.ra, o.dec) }));
+const OBJS = DATA.objs.map(o => ({ ...o, v: vRD(o.ra, o.dec) }))
+  .concat(EXTRA_OBJS.map(o => { const v = vRD(o.ra, o.dec), [l, b] = toGal(v); return { ...o, v, l, b }; }));
 const OBJ = Object.fromEntries(OBJS.map(o => [o.id, o]));
 const GCV = OBJ.gc.v, ACV = OBJ.anti.v;
 const LANDMARK = new Set(['core', 'dir', 'pole']);
-const KIND = { core: 'Galactic landmark', dir: 'Galactic direction', pole: 'Galactic pole', neb: 'Nebula', clus: 'Star cluster', glob: 'Globular cluster', gal: 'Galaxy', dust: 'Dust and dark clouds' };
+const KIND = { core: 'Galactic landmark', dir: 'Galactic direction', pole: 'Galactic pole', neb: 'Nebula', clus: 'Star cluster', glob: 'Globular cluster', gal: 'Galaxy', dust: 'Dust and dark clouds', hist: 'Historic object' };
 const BODIES = [
   { id: 'Sun', col: '#ffd27a' }, { id: 'Moon', col: '#ebe7dc' }, { id: 'Mercury', col: '#cfc6ba' }, { id: 'Venus', col: '#fff4d8' },
   { id: 'Mars', col: '#ff9c6e' }, { id: 'Jupiter', col: '#f4e2bd' }, { id: 'Saturn', col: '#ecd291' }
@@ -148,7 +149,7 @@ function lookDesc(b) {
 const S = {
   loc: null, live: true, t: Date.now(),
   view: { mode: store.get('mode', 'dome') === 'dome' ? 'dome' : 'horizon', yaw: 180, pitch: 90, k: 1, ox: 0, oy: 0, fov: 100, hpitch: 30, pfov: 70 },
-  layers: Object.assign({ lines: true, cnames: true, snames: true, grid: false, dso: true, planets: true }, store.get('layers', {})),
+  layers: Object.assign({ lines: true, cnames: true, snames: true, grid: false, dso: true, planets: true, tech: false }, store.get('layers', {})),
   sel: null, red: store.get('red', false), expanded: false
 };
 
@@ -267,6 +268,103 @@ function nextRiseSet(v, isMoon) {
     prev = a;
   }
   return res;
+}
+
+/* ================= human-made objects ================= */
+const TECH_BY = Object.fromEntries(TECH.map(t => [t.id, t]));
+const yearOf = t => 2000 + (t - 946728000000) / 31557600000;      // Julian years from J2000
+function probeGeo(p, t) {          // straight-line escape from the Sun, seen from Earth
+  const d = p.d0 + p.au * (yearOf(t) - p.y0), u = vRD(p.ra, p.dec), s = sunVec(t);
+  return { v: norm([u[0] * d + s[0], u[1] * d + s[1], u[2] * d + s[2]]), d };
+}
+const SAT = { lib: null, state: 'idle', recs: {}, pass: {} };
+const SAT_ITEMS = TECH.filter(t => t.t === 'sat');
+const SAT_MAX_AGE = 5 * 86400000;   // an orbit fit older than this can't place a low satellite usefully
+function ensureSats() {
+  if (SAT.state !== 'idle') return;
+  SAT.state = 'loading';
+  const el = document.createElement('script');
+  el.src = 'https://cdn.jsdelivr.net/npm/satellite.js@5.0.0/dist/satellite.min.js';
+  el.onload = () => { SAT.lib = window.satellite; loadTLEs(); };
+  el.onerror = () => { SAT.state = 'failed'; satFail(); };
+  document.head.appendChild(el);
+}
+async function getTLE(id) {
+  const key = 'tle' + id, cached = store.get(key, null);
+  if (cached && Date.now() - cached.at < 12 * 3600000) return cached;
+  const sources = [
+    async () => {
+      const r = await fetch(`https://celestrak.org/NORAD/elements/gp.php?CATNR=${id}&FORMAT=TLE`); if (!r.ok) throw new Error(r.status);
+      const L = (await r.text()).split(/\r?\n/).map(x => x.trim()), i = L.findIndex(x => x.startsWith('1 '));
+      if (i < 0 || !(L[i + 1] || '').startsWith('2 ')) throw new Error('no TLE'); return [L[i], L[i + 1]];
+    },
+    async () => {
+      const r = await fetch(`https://tle.ivanstanojevic.me/api/tle/${id}`); if (!r.ok) throw new Error(r.status);
+      const j = await r.json(); if (!j.line1 || !j.line2) throw new Error('no TLE'); return [j.line1, j.line2];
+    }
+  ];
+  for (const src of sources) {
+    try { const [l1, l2] = await src(), v = { at: Date.now(), l1, l2 }; store.set(key, v); return v; } catch (e) { /* try the next source */ }
+  }
+  return cached;    // older data beats none; satLook checks it against the orbit's epoch
+}
+function tleEpoch(l1) { const yy = +l1.slice(18, 20), doy = +l1.slice(20, 32); return Date.UTC(yy < 57 ? 2000 + yy : 1900 + yy, 0, 1) + (doy - 1) * 86400000; }
+async function loadTLEs() {
+  const got = await Promise.all(SAT_ITEMS.map(t => getTLE(t.norad)));
+  got.forEach((g, i) => {
+    if (!g) return;
+    try { SAT.recs[SAT_ITEMS[i].id] = { rec: SAT.lib.twoline2satrec(g.l1, g.l2), epoch: tleEpoch(g.l1) }; } catch (e) { /* unreadable orbit data */ }
+  });
+  SAT.state = Object.keys(SAT.recs).length ? 'ready' : 'failed';
+  if (SAT.state === 'failed') satFail();
+  T.key = ''; req();
+}
+function satFail() { if (S.layers.tech) toast('Live satellite orbits couldn’t be loaded here, so space stations aren’t shown. Spacecraft beyond Earth orbit still are.'); }
+function satLook(id, t) {
+  const r = SAT.recs[id]; if (!r || Math.abs(t - r.epoch) > SAT_MAX_AGE) return null;
+  const L = SAT.lib, d = new Date(t), pv = L.propagate(r.rec, d);
+  if (!pv || !pv.position) return null;
+  const g = L.gstime(d), p = pv.position;
+  const la = L.ecfToLookAngles({ longitude: S.loc.lon * DEG, latitude: S.loc.lat * DEG, height: 0.05 }, L.eciToEcf(p, g));
+  const s = sunVec(t), along = p.x * s[0] + p.y * s[1] + p.z * s[2];
+  const perp = Math.hypot(p.x - along * s[0], p.y - along * s[1], p.z - along * s[2]);
+  const ce = Math.cos(la.elevation);
+  return { h: [ce * Math.sin(la.azimuth), ce * Math.cos(la.azimuth), Math.sin(la.elevation)], el: la.elevation * RAD,
+    height: L.eciToGeodetic(p, g).height, lit: !(along < 0 && perp < 6371) };     // cylindrical Earth shadow
+}
+const azH = h => ((Math.atan2(h[0], h[1]) * RAD) % 360 + 360) % 360;
+// first pass above 10° in the next 24 h, and the first one you can actually see (sunlit craft, sky dark)
+function nextPass(id) {
+  const key = [id, S.loc.lat, S.loc.lon, Math.floor(S.t / 300000)].join('|');
+  if (SAT.pass[id] && SAT.pass[id].key === key) return SAT.pass[id].res;
+  let cur = null, first = null, vis = null;
+  for (let t = S.t; t < S.t + 86400000 && !vis; t += 20000) {
+    const s = satLook(id, t); if (!s) break;
+    if (s.el > 10) {
+      if (!cur) cur = { start: t, max: s.el, az0: azH(s.h), vis: false };
+      if (s.el > cur.max) cur.max = s.el;
+      cur.end = t; cur.az1 = azH(s.h);
+      if (s.lit && altOf(horMatrix(t, S.loc.lat, S.loc.lon), sunVec(t)) < -6) cur.vis = true;
+    } else if (cur) { first = first || cur; if (cur.vis) vis = cur; cur = null; }
+  }
+  const res = { vis, any: first || cur };
+  SAT.pass[id] = { key, res };
+  return res;
+}
+const T = { key: '', items: [] };
+function techItems() {
+  if (T.key === E.key) return T.items;
+  T.key = E.key; T.items = [];
+  for (const it of TECH) {
+    let o = null;
+    if (it.t === 'probe') o = probeGeo(it, S.t);
+    else if (it.t === 'l2') { const s = sunVec(S.t); o = { v: [-s[0], -s[1], -s[2]] }; }
+    else if (it.t === 'at') { const b = E.bodies.find(b => b.id === it.body); if (b) o = { v: b.v }; }
+    else if (it.t === 'signal') o = { v: vRD(it.ra, it.dec) };
+    else if (SAT.state === 'ready') { const st = satLook(it.id, S.t); if (st) o = { ...st, v: mtv(E.H, st.h) }; }
+    if (o) T.items.push({ it, ...o });
+  }
+  return T.items;
 }
 
 /* ================= rendering: WebGL sky ================= */
@@ -461,7 +559,7 @@ const FONT = {
   card: '600 14px "Instrument Sans", system-ui, sans-serif',
   mono: '500 10.5px "IBM Plex Mono", ui-monospace, monospace'
 };
-const COL = { amber: '#f2b35e', amberA: a => `rgba(242,179,94,${a})`, rose: '#ff92a5', ice: '#a9c6ff', violet: '#b8a8ff', muted: '#8f99ae', fg: '#e8ecf5', halo: 'rgba(4,6,12,0.85)' };
+const COL = { hist: '#f3dfb0', tech: '#5fe0cc', amber: '#f2b35e', amberA: a => `rgba(242,179,94,${a})`, rose: '#ff92a5', ice: '#a9c6ff', violet: '#b8a8ff', muted: '#8f99ae', fg: '#e8ecf5', halo: 'rgba(4,6,12,0.85)' };
 let hits = [], labels = [];
 
 function strokeSky(pts, closed, above, below) {
@@ -533,6 +631,10 @@ function marker(kind, x, y, dim) {
       ctx.strokeStyle = COL.violet; ctx.beginPath(); ctx.ellipse(x, y, 8, 3.6, -0.5, 0, 7); ctx.stroke(); break;
     case 'dust':
       ctx.strokeStyle = 'rgba(160,170,195,.75)'; ctx.setLineDash([3, 3]); ctx.beginPath(); ctx.arc(x, y, 7, 0, 7); ctx.stroke(); break;
+    case 'hist':      // four-point sparkle
+      ctx.fillStyle = COL.hist; ctx.beginPath();
+      for (let k = 0; k < 8; k++) { const a = k * Math.PI / 4, r = k % 2 ? 1.8 : 6.5; ctx.lineTo(x + Math.sin(a) * r, y - Math.cos(a) * r); }
+      ctx.closePath(); ctx.fill(); break;
   }
   ctx.restore();
 }
@@ -624,7 +726,7 @@ function drawOverlay() {
     const isCore = o.k === 'core';
     label(p[0], p[1], o.n + (below ? ' (below horizon)' : ''), {
       font: isCore ? FONT.big : o.k === 'dust' ? FONT.atlasS : FONT.label,
-      color: land ? COL.amber : o.k === 'neb' ? COL.rose : o.k === 'gal' ? COL.violet : o.k === 'dust' ? '#b3bccd' : COL.ice,
+      color: land ? COL.amber : o.k === 'neb' ? COL.rose : o.k === 'gal' ? COL.violet : o.k === 'dust' ? '#b3bccd' : o.k === 'hist' ? COL.hist : COL.ice,
       pri: isCore ? 100 : land ? 88 : 70, r: isCore ? 13 : 7, alpha: below ? 0.5 : 1, block: true
     });
     hits.push({ x: p[0], y: p[1], pri: land ? 3 : 2.5, sel: { type: 'obj', id: o.id } });
@@ -644,6 +746,8 @@ function drawOverlay() {
     label(p[0], p[1], b.id + (below ? ' (below horizon)' : ''), { font: FONT.label, color: b.col, pri: 90, r: 9, alpha: below ? 0.6 : 1, block: true });
     hits.push({ x: p[0], y: p[1], pri: 2.8, sel: { type: 'body', id: b.id } });
   }
+
+  if (S.layers.tech) drawTech(Up);
 
   // point mode: aim marker and what it points at
   if (S.view.mode === 'point') {
@@ -668,7 +772,41 @@ function drawOverlay() {
   }
   placeLabels();
 }
+function drawTech(Up) {
+  const ctx = octx, dark = E.sunAlt < -6;
+  for (const x of techItems()) {
+    const it = x.it, alt = dot(Up, x.v);
+    if (it.t === 'sat' && alt < 0) continue;
+    const below = alt < 0, p = proj(x.v); if (!onScreen(p, 10)) continue;
+    if (it.t === 'sat') {          // dotted track: two minutes back, five ahead
+      const tr = []; for (let k = -6; k <= 15; k++) { const st = satLook(it.id, S.t + k * 20000); if (st) tr.push(mtv(E.H, st.h)); }
+      strokeSky(tr, false, { c: 'rgba(95,224,204,.55)', w: 1.2, dash: [2, 4] });
+    }
+    let mx = p[0], my = p[1];
+    ctx.save(); ctx.globalAlpha = below ? 0.45 : 1; ctx.strokeStyle = COL.tech; ctx.fillStyle = COL.tech; ctx.lineWidth = 1.5;
+    if (it.t === 'at' || it.t === 'signal') {     // shares a spot with a planet or cluster: offset, with a leader line
+      mx += 17; my -= 17; ctx.beginPath(); ctx.moveTo(p[0] + 7, p[1] - 7); ctx.lineTo(mx - 5, my + 5); ctx.stroke();
+    }
+    if (it.t === 'sat') {
+      const lit = x.lit && dark;
+      if (lit) { ctx.shadowColor = COL.tech; ctx.shadowBlur = 10; }
+      ctx.beginPath(); ctx.arc(mx, my, 3.2, 0, 7); if (lit) ctx.fill(); else ctx.stroke();
+      ctx.shadowBlur = 0; ctx.beginPath(); ctx.moveTo(mx - 10, my); ctx.lineTo(mx - 5, my); ctx.moveTo(mx + 5, my); ctx.lineTo(mx + 10, my); ctx.stroke();
+    } else if (it.t === 'probe') {
+      ctx.beginPath(); ctx.moveTo(mx, my - 6); ctx.lineTo(mx + 5, my + 4); ctx.lineTo(mx - 5, my + 4); ctx.closePath(); ctx.stroke();
+    } else if (it.t === 'l2') {
+      ctx.beginPath(); ctx.moveTo(mx, my - 5); ctx.lineTo(mx + 5, my); ctx.lineTo(mx, my + 5); ctx.lineTo(mx - 5, my); ctx.closePath(); ctx.stroke();
+    } else if (it.t === 'signal') {
+      ctx.beginPath(); ctx.arc(mx - 3, my + 3, 1.8, 0, 7); ctx.fill();
+      for (const r of [5.5, 9.5]) { ctx.beginPath(); ctx.arc(mx - 3, my + 3, r, -Math.PI / 2, 0); ctx.stroke(); }
+    } else { ctx.beginPath(); ctx.arc(mx, my, 4.5, 0, 7); ctx.stroke(); ctx.beginPath(); ctx.arc(mx, my, 1.5, 0, 7); ctx.fill(); }
+    ctx.restore();
+    label(mx, my, it.n + (below ? ' (below horizon)' : ''), { font: FONT.label, color: COL.tech, pri: it.t === 'sat' ? 93 : 74, r: 9, alpha: below ? 0.55 : 1, block: true });
+    hits.push({ x: mx, y: my, pri: 2.9, sel: { type: 'tech', id: it.id } });
+  }
+}
 function selVec(sel) {
+  if (sel.type === 'tech') { const x = techItems().find(x => x.it.id === sel.id); return x && x.v; }
   if (sel.type === 'star') return [SV[sel.i * 3], SV[sel.i * 3 + 1], SV[sel.i * 3 + 2]];
   if (sel.type === 'obj') return OBJ[sel.id].v;
   if (sel.type === 'body') { const b = E.bodies.find(b => b.id === sel.id); return b && b.v; }
@@ -900,6 +1038,7 @@ function selName() {
   if (s.type === 'obj') return OBJ[s.id].n.replace(/ \(.*\)/, '');
   if (s.type === 'star') return NAMED.get(s.i)?.n || 'Star';
   if (s.type === 'body') return s.id;
+  if (s.type === 'tech') return TECH_BY[s.id].n;
   return 'Tapped point';
 }
 function markFor() {
@@ -911,28 +1050,47 @@ function markFor() {
 function renderCard() {
   const s = S.sel, v = selVec(s); if (!v) return;
   const [l, b] = toGal(v), reg = regionOf(l);
-  let eyebrow = '', name = '', facts = [], text = '', where = '';
-  const rs = s.type === 'pt' ? null : nextRiseSet(v, s.type === 'body' && s.id === 'Moon');
+  let eyebrow = '', name = '', facts = [], text = '', where = '', story = null;
+  const tech = s.type === 'tech' ? TECH_BY[s.id] : null;
+  const rs = s.type === 'pt' || (tech && tech.t === 'sat') ? null : nextRiseSet(v, (s.type === 'body' && s.id === 'Moon') || (tech && tech.body === 'Moon'));
   const rsText = rs ? (rs.up ? (rs.set ? `Sets ${hhmm(rs.set)}` : 'Up all night') : (rs.rise ? `Rises ${hhmm(rs.rise)}` : 'Doesn’t rise today')) : null;
   if (s.type === 'obj') {
-    const o = OBJ[s.id]; eyebrow = KIND[o.k] + (o.c ? ' · ' + o.c : ''); name = o.n; text = o.t;
+    const o = OBJ[s.id]; eyebrow = (o.kl || KIND[o.k]) + (o.c ? ' · ' + o.c : ''); name = o.n; text = o.t; story = STORIES[o.id];
     if (o.d) facts.push(`<b>${fmtLy(o.d)}</b> away`);
     if (o.k === 'gal' || o.k === 'pole' || o.id === 'apex') where = o.k === 'gal' ? 'Far outside the Milky Way; the arrow shows its direction from the Sun.' : 'This direction points out of the disk, so it barely shows on a top-down map.';
-    else if (o.d) where = o.d < 20000 ? `Zoomed in around the Sun: the dot is ${fmtLy(o.d)} away, among the nearby spiral arms.` : `Plotted on the map, ${fmtLy(o.d)} from the Sun.`;
+    else if (o.d) where = o.d < 1500 ? `Zoomed in around the Sun. At ${fmtLy(o.d)}, it sits almost on top of the Sun’s dot: our own small corner of the galaxy.` : o.d < 20000 ? `Zoomed in around the Sun: the dot is ${fmtLy(o.d)} away, among the nearby spiral arms.` : `Plotted on the map, ${fmtLy(o.d)} from the Sun.`;
     else where = 'The dashed line shows this direction from the Sun.';
   } else if (s.type === 'star') {
     const nm = NAMED.get(s.i), st = STARS[s.i];
-    name = nm ? nm.n : `Star of magnitude ${st[2].toFixed(1)}`; eyebrow = 'Star' + (nm && nm.c ? ' · ' + nm.c : '');
+    name = nm ? nm.n : `Star of magnitude ${st[2].toFixed(1)}`; eyebrow = 'Star' + (nm && nm.c ? ' · ' + nm.c : ''); story = nm && STORIES[nm.n];
     facts.push(`Magnitude <b>${st[2].toFixed(1)}</b>`);
     if (nm && nm.d) facts.push(`<b>${nm.d} ly</b> away`);
     const hue = st[3] < 0 ? 'blue-white' : st[3] < 0.3 ? 'white' : st[3] < 0.8 ? 'yellowish' : st[3] < 1.3 ? 'orange' : 'deep orange';
-    text = `A ${hue} star. Like every star you can pick out by eye, it lies in our own small neighborhood of the galaxy, within a few thousand light-years.`;
+    text = `${hue === 'orange' ? 'An' : 'A'} ${hue} star. Like every star you can pick out by eye, it lies in our own small neighborhood of the galaxy, within a few thousand light-years.`;
     where = nm && nm.d ? `Zoomed in around the Sun. Even at ${nm.d} light-years, it sits deep inside our own corner of the galaxy.` : 'The dashed line shows its direction from the Sun.';
   } else if (s.type === 'body') {
     const bd = E.bodies.find(x => x.id === s.id); name = s.id; eyebrow = s.id === 'Sun' ? 'Star' : s.id === 'Moon' ? 'Moon' : 'Planet';
     if (s.id === 'Moon' && bd.frac != null) facts.push(`<b>${Math.round(bd.frac * 100)}%</b> lit`);
     if (bd.mag != null && s.id !== 'Sun') facts.push(`Magnitude <b>${bd.mag.toFixed(1)}</b>`);
-    text = BODY_TEXT[s.id]; where = 'Solar System objects sit at the Sun’s dot on this scale. The line shows where they appear against the galaxy.';
+    text = BODY_TEXT[s.id]; story = STORIES[s.id]; where = 'Solar System objects sit at the Sun’s dot on this scale. The line shows where they appear against the galaxy.';
+  } else if (tech) {
+    const x = techItems().find(x => x.it.id === s.id);
+    eyebrow = tech.kl + (tech.c ? ' · ' + tech.c : ''); name = tech.full || tech.n; text = tech.d; story = tech.s;
+    where = 'Everything we have launched is still inside the Sun’s dot on this map. The line shows the direction you look to see it.';
+    if (tech.t === 'sat') {
+      facts.push(`Height <b>${Math.round(x.height)} km</b>`, x.lit ? (E.sunAlt < -6 ? '<b>Sunlit: visible now</b>' : 'Sunlit, but the sky is too bright') : 'In Earth’s shadow');
+      const np = nextPass(s.id), ps = np.vis;
+      facts.push(ps ? `Next visible pass <b>${ps.start <= S.t ? 'now' : hhmm(ps.start)}</b>, up to ${Math.round(ps.max)}°, ${compass(ps.az0)} → ${compass(ps.az1)}`
+        : np.any ? `No visible pass in 24 h; next one overhead ${hhmm(np.any.start)}, in daylight or Earth’s shadow` : 'Doesn’t rise above 10° from here in the next 24 h');
+    } else if (tech.t === 'probe') {
+      facts.push(`<b>${Math.round(x.d)} AU</b> from the Sun`, `Light takes <b>${(x.d * 499 / 3600).toFixed(1)} h</b> to reach it`, 'Approximate position');
+      where = `About ${Math.round(x.d)} AU from the Sun, roughly 1/${Math.round(63241 / x.d)} of a light-year. On this map it is still inside the Sun’s dot; the line shows which way it is heading.`;
+    } else if (tech.t === 'l2') facts.push('<b>1.5 million km</b> away');
+    else if (tech.t === 'signal') {
+      const ly = yearOf(S.t) - 1974.875;
+      facts.push('Sent <b>16 Nov 1974</b>', `<b>${Math.round(ly)} light-years</b> out`);
+      where = `The line points toward M13, 22,000 light-years away. The message has covered ${(ly / 220).toFixed(2)}% of the trip.`;
+    }
   } else {
     eyebrow = 'Sky point'; name = reg && Math.abs(b) < 20 ? reg.n : Math.abs(b) >= 60 ? (b > 0 ? 'Toward the north galactic pole' : 'Toward the south galactic pole') : 'Out of the galactic plane';
     text = `Here you are looking ${lookDesc(b)}.` + (reg && Math.abs(b) < 20 ? ' ' + reg.d : '');
@@ -945,6 +1103,7 @@ function renderCard() {
   $('card').innerHTML = `<div class="top"><div><div class="eyebrow">${esc(eyebrow)}</div><h2>${esc(name)}</h2></div><button class="close" id="cardClose" aria-label="Close details"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M6 6l12 12M18 6 6 18"/></svg></button></div>
     <div class="facts">${facts.map(f => `<span class="fact">${f}</span>`).join('')}</div>
     <p>${esc(text)}</p>
+    ${story ? `<div class="story"><div class="eyebrow">Story</div>${story.map(p => `<p>${esc(p)}</p>`).join('')}</div>` : ''}
     <div class="where"><canvas id="cardMap" width="112" height="112"></canvas><p>${esc(where)}</p></div>`;
   $('cardClose').onclick = () => select(null);
   const m = markFor();
@@ -1210,10 +1369,15 @@ $('tDate').addEventListener('change', e => {
 const LAYERS = [
   ['lines', 'Constellation lines', ''], ['cnames', 'Constellation names', ''], ['snames', 'Star names', 'More names appear as you zoom in'],
   ['dso', 'Nebulae, clusters and galaxies', 'Galactic landmarks always stay on'], ['planets', 'Sun, Moon and planets', AE ? '' : 'Unavailable: the ephemeris library did not load'],
-  ['grid', 'Galactic grid', 'Galactic latitude ±10° and longitude every 30°']
+  ['grid', 'Galactic grid', 'Galactic latitude ±10° and longitude every 30°'],
+  ['tech', 'Human-made objects', 'Space stations, Hubble, deep-space probes, landers and the Arecibo message']
 ];
 $('toggles').innerHTML = LAYERS.map(([k, t, s]) => `<label><span>${esc(t)}${s ? `<small>${esc(s)}</small>` : ''}</span><input type="checkbox" id="ly_${k}" ${S.layers[k] ? 'checked' : ''}></label>`).join('');
-for (const [k] of LAYERS) $('ly_' + k).addEventListener('change', e => { S.layers[k] = e.target.checked; store.set('layers', S.layers); req(); });
+for (const [k] of LAYERS) $('ly_' + k).addEventListener('change', e => {
+  S.layers[k] = e.target.checked; store.set('layers', S.layers);
+  if (k === 'tech' && S.layers.tech) { ensureSats(); if (SAT.state === 'failed') satFail(); }
+  req();
+});
 $('layersBtn').addEventListener('click', () => openSheet('sheetLayers'));
 
 // red mode, view controls, panel
@@ -1246,10 +1410,16 @@ if (navigator.permissions && navigator.geolocation && (S.loc.approx || S.loc.gps
   navigator.permissions.query({ name: 'geolocation' }).then(r => { if (r.state === 'granted') useGPS(true); }).catch(() => {});
 }
 initGL();
+if (S.layers.tech) ensureSats();
 setRed(S.red);
 setMode(S.view.mode);
 refreshInfo(); req();
 if (document.fonts && document.fonts.ready) document.fonts.ready.then(() => { req(); info(); });
 setInterval(() => { if (S.live) { S.t = Date.now(); onTime(); if (openSheetEl && openSheetEl.id === 'sheetTime') syncTimeSheet(); } }, 30000);
+setInterval(() => {         // satellites cross the sky in minutes: keep them moving while the layer is on
+  if (!S.live || !S.layers.tech || SAT.state !== 'ready' || document.hidden) return;
+  S.t = Date.now(); req();
+  if (S.sel && S.sel.type === 'tech' && TECH_BY[S.sel.id].t === 'sat' && !S.expanded) renderCard();
+}, 1000);
 document.addEventListener('visibilitychange', () => { if (!document.hidden && S.live) { S.t = Date.now(); onTime(); } });
 })();

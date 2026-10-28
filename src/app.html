@@ -1,7 +1,7 @@
 <title>Galaxy Overhead</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=Instrument+Sans:wght@400;500;600&family=Newsreader:ital,opsz,wght@1,6..72,400;1,6..72,500&display=swap">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=Instrument+Sans:wght@400;500;600&family=Newsreader:ital,opsz,wght@0,6..72,400;1,6..72,400;1,6..72,500&display=swap">
 <style>
 /* Layout: full-bleed sky canvas under a slim instrument bar; galaxy panel docked over the bottom edge.
    One deliberate night palette (no light theme): a star chart is read in the dark. */
@@ -105,6 +105,8 @@ button:focus-visible, input:focus-visible, label:focus-within { outline: 2px sol
 .fact { font-size: 12.5px; padding: 5px 9px; border-radius: 8px; background: var(--raise); border: 1px solid var(--line); color: #cdd4e2; }
 .fact b { font-weight: 500; color: var(--fg); font-family: var(--f-mono); font-variant-numeric: tabular-nums; }
 .card p { font-size: 14px; line-height: 1.5; color: #c9d0de; max-width: 62ch; }
+.story { display: flex; flex-direction: column; gap: 8px; padding-top: 12px; border-top: 1px solid var(--line); }
+.card .story p { font-family: var(--f-atlas); font-size: 16px; line-height: 1.5; color: #dde2ec; }
 .where { display: grid; grid-template-columns: 112px 1fr; gap: 12px; align-items: center; }
 .where canvas { width: 112px; height: 112px; border-radius: 50%; background: #070a12; }
 .where p { font-size: 13px; color: var(--muted); }
