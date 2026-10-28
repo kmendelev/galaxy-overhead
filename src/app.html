@@ -1,0 +1,273 @@
+<title>Galaxy Overhead</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=Instrument+Sans:wght@400;500;600&family=Newsreader:ital,opsz,wght@1,6..72,400;1,6..72,500&display=swap">
+<style>
+/* Layout: full-bleed sky canvas under a slim instrument bar; galaxy panel docked over the bottom edge.
+   One deliberate night palette (no light theme): a star chart is read in the dark. */
+:root {
+  color-scheme: dark;
+  --void: #04060c;
+  --panel: #0a0e18;
+  --raise: #121827;
+  --line: rgba(150, 170, 215, 0.16);
+  --fg: #e8ecf5;
+  --muted: #8f99ae;
+  --faint: #5f687c;
+  --amber: #f2b35e;
+  --amber-dim: rgba(242, 179, 94, 0.16);
+  --rose: #ff92a5;
+  --violet: #b8a8ff;
+  --ice: #a9c6ff;
+  --ok: #7dd3a7;
+  --warn: #efc56b;
+  --f-ui: "Instrument Sans", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --f-atlas: "Newsreader", Georgia, "Times New Roman", serif;
+  --f-mono: "IBM Plex Mono", ui-monospace, Menlo, Consolas, monospace;
+  --reserve: 132px;
+}
+html, body { height: 100%; }
+body { background: var(--void); color: var(--fg); font-family: var(--f-ui); overflow: hidden; overscroll-behavior: none; -webkit-tap-highlight-color: transparent; }
+button { font: inherit; color: inherit; background: none; border: 0; cursor: pointer; }
+button:focus-visible, input:focus-visible, label:focus-within { outline: 2px solid var(--amber); outline-offset: 2px; }
+#app { position: relative; height: 100%; display: flex; flex-direction: column; }
+
+/* ---------- top bar ---------- */
+.bar { display: flex; align-items: center; gap: 8px; padding-block: 8px; padding-left: max(12px, env(safe-area-inset-left, 0px)); padding-right: max(12px, env(safe-area-inset-right, 0px)); background: var(--panel); border-bottom: 1px solid var(--line); z-index: 5; }
+.chip { display: flex; align-items: center; gap: 8px; min-width: 0; height: 44px; padding: 0 12px 0 10px; border-radius: 12px; background: var(--raise); border: 1px solid var(--line); text-align: left; }
+.chip svg { flex: none; color: var(--amber); }
+.chip .t { display: flex; flex-direction: column; min-width: 0; line-height: 1.15; }
+.chip b { font-weight: 600; font-size: 14px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.chip small { font-size: 11px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.chip.loc { flex: 1 1 auto; }
+.chip.time { flex: none; }
+.chip.time b { font-family: var(--f-mono); font-weight: 500; font-variant-numeric: tabular-nums; }
+.icon { flex: none; width: 44px; height: 44px; display: grid; place-items: center; border-radius: 12px; background: var(--raise); border: 1px solid var(--line); color: var(--muted); }
+.icon[aria-pressed="true"] { color: #ff6b5e; border-color: rgba(255, 107, 94, .5); }
+
+/* ---------- sky ---------- */
+#sky { position: relative; flex: 1; min-height: 0; overflow: hidden; touch-action: none; user-select: none; -webkit-user-select: none; }
+#sky canvas { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }
+.status { position: absolute; top: 10px; left: max(12px, env(safe-area-inset-left, 0px)); display: flex; flex-wrap: wrap; gap: 6px; pointer-events: none; max-width: calc(100% - 24px); }
+.pill { display: inline-flex; align-items: center; gap: 6px; padding: 4px 9px; border-radius: 999px; background: rgba(10, 14, 24, .72); border: 1px solid var(--line); font-size: 11.5px; color: var(--muted); backdrop-filter: blur(6px); -webkit-backdrop-filter: blur(6px); }
+.pill i { width: 7px; height: 7px; border-radius: 50%; background: var(--faint); }
+.pill.dark i { background: var(--ok); } .pill.twi i { background: var(--warn); } .pill.day i { background: #7fb6ff; }
+.pill b { color: var(--fg); font-weight: 500; }
+.viewctl { position: absolute; left: 0; right: 0; bottom: calc(var(--reserve) + 10px); display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: 8px; padding-left: max(12px, env(safe-area-inset-left, 0px)); padding-right: max(12px, env(safe-area-inset-right, 0px)); pointer-events: none; }
+.seg { pointer-events: auto; display: flex; padding: 3px; gap: 2px; border-radius: 12px; background: rgba(10, 14, 24, .8); border: 1px solid var(--line); backdrop-filter: blur(6px); -webkit-backdrop-filter: blur(6px); }
+.seg button { height: 34px; padding: 0 9px; border-radius: 9px; font-size: 13px; color: var(--muted); white-space: nowrap; }
+.seg button[aria-pressed="true"] { background: var(--raise); color: var(--fg); box-shadow: inset 0 0 0 1px var(--line); }
+.seg.face button { width: 29px; padding: 0; font-family: var(--f-mono); font-size: 12.5px; }
+.toast { position: absolute; z-index: 3; top: 52px; left: 50%; transform: translateX(-50%); width: max-content; max-width: calc(100% - 32px); padding: 10px 14px; border-radius: 12px; background: var(--raise); border: 1px solid var(--line); box-shadow: 0 8px 30px rgba(0, 0, 0, .5); font-size: 13px; line-height: 1.4; }
+
+/* ---------- bottom panel ---------- */
+#panel { position: absolute; left: 0; right: 0; bottom: 0; z-index: 4; background: var(--panel); border-top: 1px solid var(--line); border-radius: 18px 18px 0 0; box-shadow: 0 -12px 40px rgba(0, 0, 0, .45); max-height: 72%; display: flex; flex-direction: column; }
+#app.expanded #panel { top: 56px; max-height: none; }
+.grab { display: block; width: 100%; padding: 7px 0 2px; }
+.grab::before { content: ""; display: block; width: 38px; height: 4px; margin: 0 auto; border-radius: 4px; background: var(--faint); opacity: .7; }
+.pscroll { overflow-y: auto; overscroll-behavior: contain; padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px)); padding-bottom: 14px; }
+.summary { display: grid; grid-template-columns: 96px 1fr; gap: 14px; align-items: center; text-align: left; width: 100%; padding: 2px 0 4px; }
+.summary canvas { width: 96px; height: 96px; border-radius: 50%; background: #070a12; }
+.summary .txt { min-width: 0; display: flex; flex-direction: column; gap: 4px; }
+.eyebrow { font-size: 10.5px; letter-spacing: .12em; text-transform: uppercase; color: var(--amber); font-weight: 600; }
+.sumHead { font-size: 15.5px; font-weight: 600; line-height: 1.25; text-wrap: balance; }
+.sumSub { font-size: 13px; color: var(--muted); line-height: 1.35; }
+.more { font-size: 12.5px; color: var(--ice); }
+.details { display: flex; flex-direction: column; gap: 14px; padding-top: 6px; }
+.details h2 { font-size: 18px; font-weight: 600; text-wrap: balance; }
+.details h3 { font-size: 11px; letter-spacing: .12em; text-transform: uppercase; color: var(--muted); font-weight: 600; }
+.details p { font-size: 14px; line-height: 1.5; color: #c9d0de; max-width: 62ch; }
+.mapbox { position: relative; width: 100%; max-width: 520px; aspect-ratio: 1; align-self: center; }
+.mapbox canvas { width: 100%; height: 100%; display: block; }
+.sidebox { width: 100%; max-width: 520px; height: 150px; align-self: center; }
+.sidebox canvas { width: 100%; height: 100%; display: block; }
+.legend { display: flex; flex-wrap: wrap; gap: 6px 14px; font-size: 12px; color: var(--muted); }
+.legend span { display: inline-flex; align-items: center; gap: 6px; }
+.legend i { width: 14px; height: 3px; border-radius: 2px; display: inline-block; }
+.regions { list-style: none; display: flex; flex-direction: column; border-top: 1px solid var(--line); }
+.regions li { border-bottom: 1px solid var(--line); }
+.regions button { width: 100%; display: grid; grid-template-columns: 1fr auto; gap: 2px 12px; padding: 11px 0; text-align: left; }
+.regions .rn { font-size: 14.5px; font-weight: 600; }
+.regions .rc { grid-column: 1; font-size: 12.5px; color: var(--muted); }
+.regions .rd { grid-column: 1 / -1; font-size: 13px; color: #b9c1d1; line-height: 1.4; }
+.badge { grid-row: 1 / span 2; grid-column: 2; align-self: center; font-family: var(--f-mono); font-size: 11.5px; padding: 3px 8px; border-radius: 999px; border: 1px solid var(--line); color: var(--faint); white-space: nowrap; }
+.badge.up { color: var(--ok); border-color: rgba(125, 211, 167, .4); }
+.badge.low { color: var(--warn); border-color: rgba(239, 197, 107, .4); }
+.credit { font-size: 11.5px !important; color: var(--faint) !important; line-height: 1.45 !important; }
+.credit a { color: var(--muted); }
+
+/* object card */
+.card { display: flex; flex-direction: column; gap: 10px; padding-top: 2px; }
+.card .top { display: flex; justify-content: space-between; align-items: flex-start; gap: 10px; }
+.card h2 { font-size: 20px; font-weight: 600; line-height: 1.2; text-wrap: balance; margin-top: 3px; }
+.close { flex: none; width: 36px; height: 36px; border-radius: 10px; background: var(--raise); border: 1px solid var(--line); display: grid; place-items: center; color: var(--muted); }
+.facts { display: flex; flex-wrap: wrap; gap: 6px; }
+.fact { font-size: 12.5px; padding: 5px 9px; border-radius: 8px; background: var(--raise); border: 1px solid var(--line); color: #cdd4e2; }
+.fact b { font-weight: 500; color: var(--fg); font-family: var(--f-mono); font-variant-numeric: tabular-nums; }
+.card p { font-size: 14px; line-height: 1.5; color: #c9d0de; max-width: 62ch; }
+.where { display: grid; grid-template-columns: 112px 1fr; gap: 12px; align-items: center; }
+.where canvas { width: 112px; height: 112px; border-radius: 50%; background: #070a12; }
+.where p { font-size: 13px; color: var(--muted); }
+
+/* sheets */
+.scrim { position: absolute; inset: 0; z-index: 8; background: rgba(2, 3, 8, .55); }
+.sheet { position: absolute; left: 0; right: 0; bottom: 0; z-index: 9; max-height: 86%; display: flex; flex-direction: column; background: var(--panel); border-top: 1px solid var(--line); border-radius: 18px 18px 0 0; }
+.sheet .pscroll { padding-top: 4px; display: flex; flex-direction: column; gap: 14px; }
+.sheet h2 { font-size: 18px; font-weight: 600; }
+.sheet .note { font-size: 12.5px; color: var(--muted); line-height: 1.45; }
+.field { display: flex; flex-direction: column; gap: 6px; font-size: 12px; color: var(--muted); }
+.field input[type="search"], .field input[type="text"], .field input[type="date"], .field input[type="number"] { height: 44px; padding: 0 12px; border-radius: 10px; background: var(--raise); border: 1px solid var(--line); color: var(--fg); font: 15px var(--f-ui); width: 100%; min-width: 0; }
+.row { display: flex; gap: 8px; }
+.row > * { flex: 1; min-width: 0; }
+.results { list-style: none; display: flex; flex-direction: column; }
+.results button { width: 100%; text-align: left; padding: 10px 2px; border-bottom: 1px solid var(--line); display: flex; flex-direction: column; gap: 2px; }
+.results b { font-weight: 500; font-size: 15px; }
+.results small { color: var(--muted); font-size: 12px; }
+.btn { height: 44px; padding: 0 16px; border-radius: 10px; background: var(--raise); border: 1px solid var(--line); font-weight: 500; font-size: 14px; }
+.btn.primary { background: var(--amber); color: #1c1306; border-color: transparent; font-weight: 600; }
+.tbig { font-family: var(--f-mono); font-size: 30px; font-weight: 500; font-variant-numeric: tabular-nums; letter-spacing: -.01em; }
+.tbig small { display: block; font-family: var(--f-ui); font-size: 13px; color: var(--muted); letter-spacing: 0; margin-top: 2px; }
+input[type="range"] { width: 100%; height: 36px; accent-color: var(--amber); }
+.ticks { display: flex; justify-content: space-between; font-family: var(--f-mono); font-size: 11px; color: var(--faint); margin-top: -4px; }
+.night { display: flex; flex-direction: column; gap: 8px; }
+.nrow { display: flex; justify-content: space-between; gap: 12px; font-size: 13.5px; padding: 9px 0; border-bottom: 1px solid var(--line); }
+.nrow span:first-child { color: var(--muted); }
+.nrow span:last-child { font-family: var(--f-mono); font-size: 13px; text-align: right; }
+.toggles { display: flex; flex-direction: column; }
+.toggles label { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 12px 0; border-bottom: 1px solid var(--line); font-size: 15px; }
+.toggles label small { display: block; color: var(--muted); font-size: 12px; margin-top: 2px; }
+.toggles input { width: 22px; height: 22px; accent-color: var(--amber); flex: none; }
+
+#red { position: fixed; inset: 0; z-index: 50; pointer-events: none; background: #ff0000; mix-blend-mode: multiply; }
+@media (min-width: 760px) {
+  #panel, .sheet { left: auto; right: 16px; bottom: 16px; width: 420px; border-radius: 18px; border: 1px solid var(--line); }
+  #app.expanded #panel { top: 72px; }
+  .viewctl { bottom: 16px; right: 452px; }
+}
+@media (prefers-reduced-motion: no-preference) {
+  .sheet, #panel { transition: transform .18s ease-out; }
+}
+</style>
+
+<div id="app">
+  <header class="bar">
+    <button id="locBtn" class="chip loc" aria-label="Change location">
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 21s-7-6.2-7-11.5A7 7 0 0 1 19 9.5C19 14.8 12 21 12 21z"/><circle cx="12" cy="9.5" r="2.5"/></svg>
+      <span class="t"><b id="locName">Locating…</b><small id="locSub"></small></span>
+    </button>
+    <button id="timeBtn" class="chip time" aria-label="Change time">
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="12" cy="12" r="8.5"/><path d="M12 7.5V12l3 2"/></svg>
+      <span class="t"><b id="timeMain">--:--</b><small id="timeSub">Now</small></span>
+    </button>
+    <button id="layersBtn" class="icon" aria-label="Map layers">
+      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round" aria-hidden="true"><path d="M12 3 2.5 8 12 13l9.5-5L12 3z"/><path d="m2.5 12.5 9.5 5 9.5-5"/><path d="m2.5 16.5 9.5 5 9.5-5" opacity=".55"/></svg>
+    </button>
+    <button id="redBtn" class="icon" aria-label="Red night-vision mode" aria-pressed="false">
+      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M20 14.5A8 8 0 0 1 9.5 4a8 8 0 1 0 10.5 10.5z"/></svg>
+    </button>
+  </header>
+
+  <main id="sky" aria-label="Sky map. Drag to turn, pinch to zoom, tap an object for details.">
+    <canvas id="gl"></canvas>
+    <canvas id="ov"></canvas>
+    <div class="status" id="status"></div>
+    <div class="toast" id="toast" role="status" hidden></div>
+    <div class="viewctl">
+      <div class="seg" role="group" aria-label="View">
+        <button id="vDome" aria-pressed="true">Whole sky</button>
+        <button id="vHor" aria-pressed="false">Horizon</button>
+        <button id="vPoint" aria-pressed="false">Point</button>
+      </div>
+      <div class="seg face" id="faceSeg" role="group" aria-label="Direction you are facing">
+        <button data-face="0" aria-pressed="false">N</button>
+        <button data-face="90" aria-pressed="false">E</button>
+        <button data-face="180" aria-pressed="false">S</button>
+        <button data-face="270" aria-pressed="false">W</button>
+      </div>
+    </div>
+  </main>
+
+  <section id="panel" aria-live="polite">
+    <button class="grab" id="grab" aria-label="Expand or collapse the galaxy panel"></button>
+    <div class="pscroll" id="pscroll">
+      <button class="summary" id="summary" aria-label="Open the galaxy map">
+        <canvas id="mini" width="96" height="96"></canvas>
+        <span class="txt">
+          <span class="eyebrow" id="sumEyebrow">Your view into the Milky Way</span>
+          <span class="sumHead" id="sumHead">Working out tonight's sky…</span>
+          <span class="sumSub" id="sumSub"></span>
+        </span>
+      </button>
+      <div class="details" id="details" hidden>
+        <h2 id="dTitle">Where you're looking in the galaxy</h2>
+        <p id="dIntro"></p>
+        <div class="mapbox"><canvas id="bigmap"></canvas></div>
+        <div class="legend">
+          <span><i style="background:var(--amber)"></i>Galactic plane above your horizon</span>
+          <span><i style="background:var(--ice)"></i>Straight overhead</span>
+          <span><i style="background:rgba(185,200,240,.6)"></i>Spiral arms (far side uncertain)</span>
+        </div>
+        <h3>Side view: how far out of the disk is overhead?</h3>
+        <div class="sidebox"><canvas id="side"></canvas></div>
+        <h3>Along the galactic plane tonight</h3>
+        <ul class="regions" id="regions"></ul>
+        <p class="credit">Stars: Hipparcos and Yale Bright Star data via d3-celestial (BSD licence, Olaf Frohn), which also supplies the Milky Way outline and constellation lines. Spiral arms are a schematic after Reid et al. 2019. Sun, Moon and planets: Astronomy Engine (Don Cross). City list: GeoNames (CC BY 4.0). Distances are rounded; many are uncertain by 10–20%.</p>
+      </div>
+      <div class="card" id="card" hidden></div>
+    </div>
+  </section>
+
+  <div class="scrim" id="scrim" hidden></div>
+  <section class="sheet" id="sheetLoc" hidden aria-label="Location">
+    <button class="grab" data-close aria-label="Close"></button>
+    <div class="pscroll">
+      <h2>Where are you?</h2>
+      <button class="btn primary" id="gpsBtn">Use my location</button>
+      <p class="note" id="gpsErr" hidden></p>
+      <p class="note">Or pick the nearest large city, or enter coordinates. A city within 100 km or so gives the same view.</p>
+      <label class="field">Search cities<input type="search" id="citySearch" placeholder="e.g. Lisbon, Denver, Pune" autocomplete="off" enterkeyhint="search"></label>
+      <ul class="results" id="cityResults"></ul>
+      <div class="field">Or enter coordinates (decimal degrees, south and west negative)
+        <div class="row">
+          <input type="text" id="latIn" inputmode="decimal" placeholder="Latitude, e.g. 40.71" aria-label="Latitude">
+          <input type="text" id="lonIn" inputmode="decimal" placeholder="Longitude, e.g. -74.01" aria-label="Longitude">
+        </div>
+      </div>
+      <button class="btn primary" id="coordSet">Use these coordinates</button>
+      <p class="note" id="coordErr" hidden></p>
+    </div>
+  </section>
+  <section class="sheet" id="sheetTime" hidden aria-label="Time">
+    <button class="grab" data-close aria-label="Close"></button>
+    <div class="pscroll">
+      <div class="tbig" id="tBig">--:--<small></small></div>
+      <div>
+        <input type="range" id="tRange" min="0" max="1440" step="5" aria-label="Time of night">
+        <div class="ticks"><span>12:00</span><span>18:00</span><span>00:00</span><span>06:00</span><span>12:00</span></div>
+      </div>
+      <div class="row">
+        <button class="btn" id="tMinus">− 1 h</button>
+        <button class="btn primary" id="tNow">Now</button>
+        <button class="btn" id="tPlus">+ 1 h</button>
+      </div>
+      <label class="field">Night of<input type="date" id="tDate"></label>
+      <div class="night" id="nightInfo"></div>
+    </div>
+  </section>
+  <section class="sheet" id="sheetLayers" hidden aria-label="Layers">
+    <button class="grab" data-close aria-label="Close"></button>
+    <div class="pscroll">
+      <h2>Show on the sky</h2>
+      <div class="toggles" id="toggles"></div>
+    </div>
+  </section>
+  <div id="red" hidden></div>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/astronomy-engine@2.1.19/astronomy.browser.min.js"></script>
+<script>
+/*__DATA__*/
+</script>
+<script>
+/*__APP__*/
+</script>
